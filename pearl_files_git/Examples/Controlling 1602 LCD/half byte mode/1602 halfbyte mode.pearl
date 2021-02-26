@@ -1,0 +1,125 @@
+;;;;; controlling 1602 using half byte mode 	     ;;;;;
+;;; RS --> P0.3 E --> P0.4. D7 to D4 --> P1.7 to P1.4. ;;;
+
+
+;;; fsys = 50 MHz
+; compare_th0 = x2d
+; compare_tl0 = x8d
+; prescalse_64 = $1
+
+;;; fsys = 35 MHz
+compare_th0 = x20
+compare_tl0 = x0b
+prescalse_64 = $1
+
+DATA = P1
+LCD_RS = P0.3
+LCD_E = P0.4
+
+my_word:
+	.word @ my_data, data_len "4-bit Mode!!"
+	
+__init__:
+	
+	;; set Timer 0 for 15 ms delay
+	
+	MOV TH0 compare_th0
+	MOV TL0 compare_tl0
+	MOV CS0 prescalse_64
+	SET T0E
+	
+	DDRP0 $0
+	DDRP1 $0
+	
+	MOV P0 $0		;; makes LCD_RS '0' i.e ready to send instructions to the display
+	
+	MOV R0 my_data        ;; R0 stores the address of my_data
+	MOV R1 (data_len - 1) ;; stores the lenght of my_data
+	
+	CALL delay
+
+display_set_up:
+	MOV R2 x30 			   ;; 8 bit mode
+	
+	CALL set_instruction
+	CALL delay
+	
+	CALL set_instruction
+	CALL delay
+	
+	CALL set_instruction
+	CALL delay
+	
+	MOV R2 x20             ;; half byte mode
+	CALL set_instruction
+	CALL delay
+	
+	;;; function set command
+	MOV R2 x20			;; Function set command : 1 line, 5x8 Font size
+	CALL send_instructions
+	
+	
+	MOV R2 x01 			;; clear display
+	CALL send_instructions
+	
+	MOV R2 x0c			;; display ON, cursor off, blink off
+	CALL send_instructions
+
+data_write_Mode:	
+	SET LCD_RS	;; write data to LCD
+
+send_characters:
+	MOV A @R0                  ;; write data to LCD
+	MOV R2, A                  ;; load A with value from address pointed by R0
+	CALL set_data
+	CALL shift_LSB
+	CALL set_data
+	DEC R0 $1                  ;; R0 has the address of the next character of the string
+	DJNZ R1, send_characters   ;; check if all charactes are sent; if not then continue sending
+	
+	CLR LCD_RS
+	
+	HLT
+	
+send_instructions:
+	CALL set_instruction
+	CALL shift_LSB
+	CALL set_instruction
+	RET
+	
+set_instruction:	
+set_data:
+	;; mask lower 4 bits of Port 1
+	PUSH R2
+	PUSH R1
+	MOV R2A $0
+	MOV A, DATA
+	MOV R1, A
+	MOV R1B $0
+	MOV A, R2
+	ORL R1
+	MOV DATA, A
+	POP R1
+	POP R2
+	
+execute_instruction:
+	SET LCD_E
+
+delay:
+	SET TR0
+loop:
+	JNBTF0 loop
+	CLR T0
+	
+	CLR LCD_E
+	RET
+
+shift_LSB:
+	MOV R3 $3
+shift:
+	MOV A, R2
+	MOV C $0
+	RLC
+	MOV R2, A
+	DJNZ R3, shift
+	RET

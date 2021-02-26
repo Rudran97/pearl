@@ -1,0 +1,38 @@
+    ;;; fsys = 50 MHz
+	; compare_th0 = xbe
+	; compare_tl0 = xbc
+	; prescale_1024 = $4
+
+	;;; fsys = 35 MHz
+	compare_th0 = x85
+	compare_tl0 = x84
+	prescale_1024 = $4
+
+__init__:
+
+	;;; set Timer 0 for 1 sec delay
+	;;; compare value = fsys / (1 * 1024)
+	
+	mov th0 compare_th0
+	mov tl0 compare_tl0
+	mov cs0 prescale_1024
+	set t0e
+	
+	mov r0 xff  ;; R0 = 1111 1111
+	
+blink:
+	mov a, r0   ;; A = R0
+	cpl a		;; complement A i.e. 0000 0000 and so on...
+	out			;; Display result of A into OUTPUT Port built in LEDs
+	mov r0, a   ;; store the current value of A in R0
+	call delay  ;; add delay
+	jmp blink
+	
+delay:
+	set tr0      ;; start Timer
+loop:
+	jnbtf0 loop  ;; wait till 1 sec
+	clr t0		 ;; stop and clear timer
+	
+	ret
+	

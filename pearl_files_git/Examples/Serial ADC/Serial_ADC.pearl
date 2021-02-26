@@ -1,0 +1,222 @@
+;;	   ADC reading and displaying in 1602 lcd
+;; RS --> P0.3 E --> P0.4 D7 - D0 --> P1
+;; ADC_CS = P0.0, ADC_CLK = P0.1, ADC_D0 = P0.2
+
+
+digit_9 = $57	;; ascii value of digit 9
+decimal_numbers = $9
+digit_len_counter_address = $200
+
+;;; fsys = 50 MHz
+; delay_th0 = x0f
+; delay_tl0 = x42
+; prescale_64 = $1
+
+;;; fsys = 35 MHz
+delay_th0 = x0a
+delay_tl0 = xae
+prescale_64 = $1
+
+;;; ADC
+; ADC_TH0 = x01
+; ADC_TL0 = xe8	
+; ADC_CS0 = $3
+
+;;; fsys = 35 MHz 10 µs delay
+ADC_TH0 = x01
+ADC_TL0 = x5e	
+ADC_CS0 = $0
+
+ADC_read_delay = $20
+
+ADC_nCS  = P0.0
+ADC_CLK = P0.1
+ADC_DO  = P0.2
+
+;;
+LED = P0.6
+THRESHOLD = $210
+
+;; Display
+LCD_RS = P0.3
+LCD_E = P0.4
+LCD_RW = P0.5
+LCD_BF = P1.7
+BF_BIT = b10000000
+
+[$200 : $0]
+[$210 : $60]      ;; set threshold to value
+
+__init__:
+	
+	;; set Timer 0 for 5 ms delay
+	
+	MOV TH0 delay_th0
+	MOV TL0 delay_tl0	
+	MOV CS0 prescale_64
+	SET T0E
+	MOV R1 $10
+
+	DDRP1 $0
+	
+	DDRP0 $4
+
+	CALL set_registers
+
+set_display:
+	MOV R2 x30		;; full byte mode Data Pins are D7 - D0
+	CALL set_instruction
+
+	CLR LCD_RS      ;; LCD instruction mode
+	MOV R2 $1 		;; clear display,
+	
+	CALL set_instruction
+
+return_home:
+	CLR LCD_RS
+	
+	MOV R2 $2		;; cursor return home
+	
+	CALL set_instruction
+	
+	MOV R2 $12		;; R2 stores the value of the data pins D7 - D0 12 --> sets display, blink off, cursor off
+	
+	CALL set_instruction
+	
+	SET LCD_RS      ;; LCD write mode
+	SET ADC_nCS     ;; disable ADC
+
+read_ADC:
+start_conversion:
+
+	;; set Timer 0 for 5 µs delay
+	
+	MOV TH0 ADC_TH0
+	MOV TL0 ADC_TL0
+	MOV CS0 ADC_CS0
+	SET T0E
+	
+	PUSH R0
+	PUSH R1
+	MOV R0A $8               ;; number of bits that must be received
+	MOV R1 $0                ;; R1 stores the ADC value
+	CLR ADC_nCS              ;; enable ADC
+	CALL delay
+	CALL pulse_clk
+
+read_analog:
+	CALL pulse_clk
+	MOV A, R1                ;; load the current ADC value to the A register
+	MOV C, ADC_DO            ;; read the current value from the ADC D0 pin and store it in Accumulator carry
+	RLC                      ;; rotate A left with carry
+	MOV R1, A				 ;; store the result back to A
+	DJNZ R0A, read_analog    ;; check if all 8 bits received
+
+end_conversion:
+	SET ADC_nCS              ;; disable ADC
+	CALL delay
+	MOV A, R1
+	POP R1
+	POP R0
+	MOV TH0 delay_th0
+	MOV TL0 delay_tl0	
+	MOV CS0 prescale_64
+	SET T0E
+
+led_controller:
+	CMP THRESHOLD       ;; comparing with value stored in addres location THRESHOLD
+	PUSH A
+	JMC led_on          ;; if ADC value > 60 turn on LED
+	CLR LED
+	JMP continue
+led_on:
+	SET LED
+continue:
+	POP A
+
+find_remainder:
+	MOV DM $0
+	DIV R1                ;; extracting each digits of ADC value
+	MOV R2, A             ;; store the remainder i.e. One's place of ADC value
+decode_digit:
+	MOV A, R2
+	SUB R3
+	JMZ store_number      ;; check if the digit matches with R3
+	DEC R0 $1             ;; else decrement the ASCII value of and store the next digit
+	DJNZ R3, decode_digit ;; decrement the digit
+stop:
+	HLT
+
+set_instruction:
+	MOV A, R2
+execute_instruction:
+	MOV P1, A
+	SET LCD_E
+check_BF:
+	CLR LCD_RS			;; RS LOW --> Instruction mode
+	SET LCD_RW			;; R/W HIGH  --> Read mode
+	DDRP1 BF_BIT		;; Setting D7/BF as input to read the busy flag
+lcd_busy:
+	JB LCD_BF lcd_busy	;; BF = 1 --> LCD is busy BF = 0 --> LCD finished executing
+	DDRP1 $0			;; Set all bits to out mode
+	CLR LCD_E			;; E LOW, i.e. finished execution cycle
+	CLR LCD_RW			;; R/W LOW --> Write mode
+	RET
+
+delay:
+	SET TR0
+loop:
+	JNBTF0 loop
+	CLR T0
+
+	RET
+
+store_number:
+	LDA digit_len_counter_address     ;; load the number of digits in the ADC value
+	ADDI $1                           ;; increment the number of digits
+	STA digit_len_counter_address     ;; store the number of digits in the ADC value
+	MOV A, R0
+	PUSH A                            ;; save the ASCII values of the digits in the stack
+	MOV A, DM                         ;; load A with the result of the division
+	SUBI $0
+	CALL set_registers
+	JMZ display_number				  ;; check if result is 0 i.e. if all the digits of ADC value has been extracted
+	MOV A, DM
+	JMP find_remainder
+
+set_registers:
+	MOV R0 digit_9 					  ;; R0 stores ascii value of digit 9
+	MOV R3 decimal_numbers 
+	RET
+
+display_number:
+	SET LCD_RS
+	POP A                             ;; retrieve the ASCII values of the digits from the stack
+	CALL execute_instruction
+	LDA digit_len_counter_address     
+	SUBI $1
+	STA digit_len_counter_address
+	JMZ read_delay                    ;; check if all the digits have been displayed
+	JMP display_number
+	
+read_delay:
+	MOV R2 $1
+add_mask:
+	SET LCD_RS
+	ldi " "
+	CALL execute_instruction
+	DJNZ R2, add_mask
+	PUSH R0
+	MOV R0 ADC_read_delay
+read_delay_loop:
+	CALL delay
+	DJNZ R0, read_delay_loop		  ;; produces a reading delay of 20 * 5 ms
+	POP R0
+	JMP return_home
+	
+pulse_clk:
+	SET ADC_CLK
+	CALL delay
+	CLR ADC_CLK
+	
+	RET

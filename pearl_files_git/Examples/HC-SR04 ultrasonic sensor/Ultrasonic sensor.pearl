@@ -1,0 +1,311 @@
+;;	   HC-SR04 Ultrasonic sensor reading
+;; RS --> P0.3 E --> P0.4 RW --> P0.5 D7 - D0 --> P1  ECHO --> P0.1 TRIG --> P0.0
+;; 1 mm = 5.8 µs : 50 MHz / (1 / 5.8 µs) = 290
+;; Final distance (mm) = Counter / (29 * 10)
+
+
+
+;;; Display
+digit_9 = $57	;; ascii value of digit 9
+decimal_numbers = $9
+digit_len_counter_address = $210
+
+;;; fsys = 50 MHz
+; display_th0 = x0f
+; display_tl0 = x42
+; display_cs0 = $1
+
+;;; fsys = 35 MHz
+display_th0 = x0a
+display_tl0 = xae
+display_cs0 = $1
+
+LCD_DATA = P1
+
+LCD_RS = P0.3
+LCD_E = P0.4
+LCD_RW = P0.5
+LCD_BF = P1.7
+BF_BIT = b10000000
+
+
+;; HCSR-04 sensor
+TRIG  = P0.0
+ECHO = P0.1
+
+echo_pin = $2
+
+;;; fsys = 50 MHz
+; us_10_th0 = x01
+; us_10_tl0 = xf4
+
+;;; fsys = 35 MHz
+us_10_th0 = x01
+us_10_tl0 = x5e
+
+divisor_address = $200
+
+; divisor1 = $10
+; divisor2 = $29
+
+;;; fsys = 35 MHz
+divisor1 = $203
+divisor2 = $1
+
+dividend_h = $201
+dividend_l = $202
+
+result_h = $203
+result_l = $204
+
+sensor_read_delay = $25
+
+
+[$210 : $0]
+
+    
+	.word @ ADDRESS, DATA_LEN "    HC-SR04"     ;; line 0
+	.word @ ADDRESS2, DATA_LEN2 "Dist (mm): "   ;; line 1
+
+__init__:
+	MOV TH0 display_th0
+	MOV TL0 display_tl0	
+	MOV CS0 display_cs0
+	SET T0E
+	MOV R1 $10
+
+	DDRP0 ( $0 | echo_pin ) ;; setting echo pin as input
+	
+	DDRP1 $0
+
+	CALL set_registers
+
+set_display:
+	MOV R2 x38		;; full byte mode Data Pins are D7 - D0, 2 line display mode
+	CALL set_instruction
+
+clear_display:	
+	CLR LCD_RS
+	MOV R2 $1 		;; clear display
+	
+	CALL set_instruction
+
+return_home:
+	ldi $0          
+	sta $211        ;; stores 0 in address 211 indicating line 0 being sent
+	CLR LCD_RS
+	
+	MOV R2 $2		;; cursor return home
+	
+	CALL set_instruction
+	
+	MOV R2 $12		;; sets display, blink off, cursor off
+	
+	CALL set_instruction
+	
+	SET LCD_RS		;; write data to LCD
+
+read_usensor:
+
+	;; initialise counter 0
+
+	MOV TH0 $0
+	MOV TL0 $0
+	SET T0E
+	SET TC0L
+timer_init:
+
+	;; set 10 µs delay for trigger pulse
+
+	MOV TH0 us_10_th0
+	MOV TL0 us_10_tl0
+	MOV CS0 $0
+	SET T0E
+
+send_trigger:	
+	SET TRIG
+	CALL delay
+	CLR TRIG
+	
+;; receive_phase
+
+wait_for_echo_High:
+	JNB ECHO wait_for_echo_High	;; wait for echo pin to go HIGH indicating start of counter
+	
+counter_init:
+	SET TCR0E				;; start counter 0
+
+wait_for_echo_Low:
+	JB ECHO wait_for_echo_Low
+	
+	CLR T0					;; stop and reset counter 0
+	
+	mov a, tc0l				;; load lower byte of the counter
+	sta dividend_l			;; store it in address dividend_l
+	mov a, tc0h				;; load upper byte of the counter 
+	sta dividend_h			;; store it in address dividend_h
+	
+	ldi divisor1			;; load 10 in A register
+	sta divisor_address     ;; store it in the divisor_address
+	
+	MOV R2 $1				;; R2 stores the number of divisions
+							;; that must be performed
+	
+U16int_DIV:
+
+	;; unsigned integer division using consecutive subtraction with carry
+
+	ldi $0
+	sta result_h
+	sta result_l
+	
+continue:
+	lda dividend_l
+	sub divisor_address
+	sta dividend_l
+	
+	lda dividend_h
+	subib $0			  ;; subraction with carry
+	sta dividend_h
+	
+	jmc increment_result  ;; if division was possible then increment the result
+	
+	lda result_l
+	sta dividend_l
+	lda result_h
+	sta dividend_h
+	ldi divisor2		  ;; load 29 in A register
+	sta divisor_address   ;; store it in the divisor_address
+	djnz R2, U16int_DIV
+	
+	lda result_l
+ 
+wait_1sec:
+	MOV TH0 display_th0
+	MOV TL0 display_tl0	
+	MOV CS0 display_cs0
+	SET T0E
+	
+	CALL delay
+	
+	jmp display_character
+	
+increment_result:
+	lda result_l
+	addi $1
+	sta result_l
+	
+	lda result_h
+	addic $0
+	sta result_h
+	
+	jmp continue
+
+display_character:
+	push a
+	push r1
+	push r0
+	MOV R0 ADDRESS          ;; R0 stores the address of my data
+	MOV R1 (DATA_LEN - 1)   ;; stores the lenght of data len - 1
+send_characters:
+	SET LCD_RS
+	MOV A @R0
+	MOV R2, A
+	CALL set_instruction
+	DEC R0 $1
+	DJNZ R1, send_characters
+	lda $211
+	subi $0
+	jmz second_line          ;; check if line 0 is being sent
+	ret                      ;; if not then return
+
+second_line:
+	ldi $1
+	sta $211                 ;; stores 1 in address 211 indicating line 1 is being sent
+	clr LCD_RS
+	mov r2 xc0
+	call set_instruction
+	mov r0 ADDRESS2
+	mov r1 (DATA_LEN2 - 1)
+	call send_characters
+	pop r0
+	pop r1
+	pop a
+
+find_remainder:
+	MOV DM $0
+	DIV R1
+	MOV R2, A
+decode_digit:
+	MOV A, R2
+	SUB R3
+	JMZ store_number
+	DEC R0 $1
+	DJNZ R3, decode_digit
+
+set_instruction:
+	MOV A, R2
+execute_instruction:
+	MOV LCD_DATA, A
+	SET LCD_E
+check_BF:
+	CLR LCD_RS		;; RS LOW --> Instruction mode
+	SET LCD_RW		;; R/W HIGH  --> Read mode
+	DDRP1 BF_BIT		;; Setting D7/BF as input to read the busy flag
+lcd_busy:
+	JB LCD_BF lcd_busy	;; BF = 1 --> LCD is busy BF = 0 --> LCD finished executing
+	DDRP1 $0		;; Set all bits to out mode
+	CLR LCD_E		;; E LOW, i.e. finished execution cycle
+	CLR LCD_RW		;; R/W LOW --> Write mode
+	RET
+
+delay:
+	SET TR0
+loop:
+	JNBTF0 loop
+	CLR T0
+
+	RET
+
+store_number:
+	LDA digit_len_counter_address
+	ADDI $1
+	STA digit_len_counter_address
+	MOV A, R0
+	PUSH A
+	MOV A, DM
+	SUBI $0
+	CALL set_registers
+	JMZ display_number
+	MOV A, DM
+	JMP find_remainder
+
+set_registers:
+	MOV R0 digit_9 ;; R0 stores ascii value of digit 9
+	MOV R3 decimal_numbers ;; stores the lenght of ADDRESS
+	RET
+
+display_number:
+	SET LCD_RS
+	POP A
+	CALL execute_instruction
+	LDA digit_len_counter_address
+	SUBI $1
+	STA digit_len_counter_address
+	JMZ read_delay
+	JMP display_number
+	
+read_delay:
+	MOV R2 $1
+add_mask:
+	SET LCD_RS
+	ldi " "
+	CALL execute_instruction
+	DJNZ R2, add_mask
+	PUSH R0
+	MOV R0 sensor_read_delay
+read_delay_loop:
+	CALL delay
+	DJNZ R0, read_delay_loop
+	POP R0
+	JMP return_home

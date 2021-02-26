@@ -1,0 +1,111 @@
+	.word @ ADDRESS, len "Hello, world!!"
+	.word @ , len1 ""
+	
+	tx = p0.2
+	btn = p0.6
+	
+	;;; fsys = 50 MHz
+	; tx_delay_th = x0a ;;half baud rate
+	; tx_delay_tl = x2c
+	
+	; baud_th = x14  ;; baud 9600
+	; baud_tl = x58
+	
+	; tx_delay_th = x02;;half baud rate
+	; tx_delay_tl = x8b
+	
+	; baud_th = x05  ;; baud 38400
+	; baud_tl = x16
+	
+	;;; fsys = 35 MHz
+	tx_delay_th = x07 ;;half baud rate
+	tx_delay_tl = x1f
+	
+	baud_th = x0e  ;; baud 9600
+	baud_tl = x3e
+	
+	prescale = $0
+	
+	btn_out = b01000000
+	tx_out = x0
+	
+	ddrp0 ($0 | btn_out | tx_out)
+
+__init__:
+	mov r3 (len + len1 +$2 - $1) ;; (r0 = len + len1 + CR + LF - 1)
+	mov a, r3
+	mov r0 (ADDRESS - len1 - len)
+	ldi x0d
+	mov @r0 a                    ;; add CR at the end of the string
+	dec r0 $1
+	ldi x0a
+	mov @r0 a					 ;; add LF at the end of the string
+	mov r0 ADDRESS
+	
+init_serial:
+	call load_character
+	set tx						 ;; pulling tx line high i.e. idle
+	mov r1 $7				     ;; R1 holds the number of characters from 7 to 0
+	
+	;; setting Timer 0 to produce a delay to reach the middle of the bit
+	
+	mov th0 tx_delay_th
+	mov tl0 tx_delay_tl
+	mov cs0 prescale
+	set t0e
+	call delay
+	
+start:
+	clr tx				;; start condition
+	call delay
+	
+	;; setting Time 0 to produce delay for 9600 baud
+	
+	mov th0 baud_th
+	mov tl0 baud_tl
+	set t0e
+	
+send_data:
+	mov a, r2
+	mov c $0
+	rrc
+	mov tx, c			 ;; send each bit
+	call delay
+	mov r2, a
+	djnz r1, send_data   ;; loop till all bits are sent
+	
+	set tx				 ;; stop condition
+	
+	call delay
+	
+	dec r0 $1			 ;; decrement string pointer
+	djnz r3, init_serial ;; loop though all characters of the string
+	
+wait:
+	jnb btn wait         ;; wait for button press to resend the string
+	
+	;; debouncing delay
+	
+	mov th0 b01001100
+	mov tl0 b01001011
+	mov cs0 $3
+	set t0e
+	
+	call delay
+	
+	jmp __init__
+
+load_character:
+	mov a @r0
+	mov r2, a
+	
+	ret
+	
+delay:
+	set tr0
+loop:
+	jnbtf0 loop
+	clr t0
+
+	ret
+	

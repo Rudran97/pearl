@@ -1,0 +1,59 @@
+	LED = P0.2
+	btn = P0.6
+	
+	;; fsys = 50 MHz
+	; compare_th0 = x4C
+	; compare_tl0 = x4B
+	; prescale_512 = $3
+	
+	;; fsys = 35 MHz
+	compare_th0 = x35
+	compare_tl0 = x68
+	prescale_512 = $3
+	
+	btn_pin = x40
+	
+	LED_STATE = r0
+	
+__inti__:
+
+	;; set Timer 0 for 200 ms delay
+
+	mov th0 compare_th0
+	mov tl0 compare_tl0
+	mov cs0 prescale_512
+	set t0e
+
+	ddrp0 btn_pin ;; set pin 6 of Port0 as input
+	
+	mov LED_STATE $0  ;; intial LED state is 0; OFF
+	
+wait:
+	jb btn toggle
+	jmp wait       ;; wait till button is pressed
+
+toggle:
+	mov a, LED_STATE  ;; load the LED state to A register
+	cmpi $0           ;; compare with 0
+	jmz setLed        ;; check if zero flag is set
+
+clrLed:
+	mov LED_STATE $0  ;; set LED state to 0
+	clr LED           ;; LED OFF
+	call debounce     ;; add debounce delay
+	jmp wait
+
+setLed:
+	mov LED_STATE $1  ;; set LED state to 1
+	set LED           ;; LED ON
+	call debounce     ;; add debounce delay
+	jmp wait
+
+debounce:
+	set tr0       ;; start Timer
+delay:
+	jnbtf0 delay  ;; wait for 200 ms
+	clr t0        ;; stop and clear timer
+	
+	ret
+	

@@ -1,0 +1,63 @@
+;;;;;; 	 1602 LCD Display control; Reading the BF     ;;;;;;
+;;; RS --> P0.3 E --> P0.4 R/W --> P0.5  D7 - D0 --> P1  ;;;
+
+
+DATA = P1
+LCD_RS = P0.3
+LCD_E = P0.4
+LCD_RW = P0.5
+
+LCD_BF = P1.7
+BF_PIN = x80
+
+my_word:
+	.word @ ADDRESS, DATA_LEN "8-bit Mode!!"
+
+display_setup:
+	DDRP0 $0
+	DDRP1 $0		        ;; set initial direction to outputs
+	
+	MOV P0 $0		        ;; which makes LCD_RS '0' i.e ready to send instructions to the display
+	
+	MOV R2 x30		        ;; full byte mode Data Pins are D7 - D0
+	CALL set_instruction
+	
+	MOV R0 ADDRESS          ;; store the address of first character i.e. 'H'
+	MOV R1 (DATA_LEN - 1)   ;; store lenght of string - 1
+	
+	MOV R2 $1 		        ;; clear display
+	CALL set_instruction
+	
+	MOV R2 $12 		        ;; display on, cursor off, blink off
+	CALL set_instruction
+	
+send_characters:
+	SET LCD_RS               ;; write data to LCD
+	MOV A @R0                ;; load A with value from address pointed by R0
+	MOV R2, A
+	CALL set_data
+	DEC R0 $1				 ;; R0 has the address of the next character of the string
+	DJNZ R1, send_characters ;; check if all charactes are sent; if not then continue sending
+	
+	CLR LCD_RS
+	
+	HLT
+	
+set_instruction:	
+set_data:
+	MOV A, R2
+	MOV DATA, A
+	
+execute_instruction:
+	SET LCD_E		;; E HIGH
+check_BF:
+	CLR LCD_RS		;; RS LOW --> Instruction mode
+	SET LCD_RW		;; R/W HIGH  --> Read mode
+	DDRP1 BF_PIN		;; Setting D7/BF as input to read the busy flag
+lcd_busy:
+	JB LCD_BF lcd_busy	;; BF = 1 --> LCD is busy ;; BF = 0 --> LCD finished executing
+	DDRP1 $0		;; Set all bits as output
+	CLR LCD_E		;; E LOW, i.e. finished execution cycle
+	CLR LCD_RW		;; R/W LOW --> Write mode
+	RET
+	
